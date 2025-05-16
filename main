@@ -1,0 +1,251 @@
+# domain_investigation_tool.py
+# Initial script for domain investigation tasks.
+#
+# Required libraries:
+# pip install dnspython python-whois requests
+#
+# IMPORTANT: This is a foundational script. Many more features, error handling,
+# and ethical/legal considerations (especially for CSAM) need to be addressed
+# for a complete and responsible tool as discussed.
+
+import dns.resolver
+import whois
+import re
+import requests
+from datetime import datetime
+
+# --- Configuration (Consider moving to a config file or environment variables later) ---
+# For URL unshortening and other HTTP requests
+REQUEST_TIMEOUT = 10  # seconds
+USER_AGENT = "DomainInvestigationTool/0.1 (YourContactInfo; +http://yourprojectwebsite.com)" # Be a good internet citizen
+
+# --- Helper Functions ---
+
+def normalize_url(url_string):
+    """
+    Basic URL normalization.
+    Adds http:// if no scheme is present.
+    """
+    if not re.match('(?:http|ftp|https)://', url_string):
+        return 'http://{}'.format(url_string)
+    return url_string
+
+def get_domain_from_url(url_string):
+    """
+    Extracts the domain name from a URL.
+    """
+    normalized_url = normalize_url(url_string)
+    try:
+        # A more robust way to get the domain, handling ports etc.
+        from urllib.parse import urlparse
+        parsed_url = urlparse(normalized_url)
+        domain = parsed_url.netloc
+        if domain.startswith("www."): # Strip www.
+            domain = domain[4:]
+        return domain
+    except Exception as e:
+        print(f"Error parsing domain from URL '{url_string}': {e}")
+        return None
+
+def unshorten_url(url_string):
+    """
+    Attempts to follow redirects to find the final destination of a shortened URL.
+    """
+    normalized_url = normalize_url(url_string)
+    try:
+        headers = {'User-Agent': USER_AGENT}
+        response = requests.get(normalized_url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        # allow_redirects=True handles most cases, response.url will be the final URL
+        if response.url != normalized_url:
+            print(f"Unshortened URL: {normalized_url} -> {response.url}")
+            return response.url
+        return normalized_url
+    except requests.exceptions.RequestException as e:
+        print(f"Error unshortening URL '{normalized_url}': {e}")
+        return normalized_url # Return original if unshortening fails
+
+# --- Core Investigation Functions ---
+
+def get_dns_info(domain):
+    """
+    Performs various DNS lookups for a given domain.
+    """
+    if not domain:
+        print("No domain provided for DNS lookup.")
+        return None
+
+    print(f"\n--- DNS Information for {domain} ---")
+    dns_results = {}
+    record_types = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA']
+
+    for record_type in record_types:
+        try:
+            answers = dns.resolver.resolve(domain, record_type)
+            dns_results[record_type] = [str(rdata) for rdata in answers]
+            print(f"{record_type} Records:")
+            for rdata in answers:
+                print(f"  {rdata}")
+        except dns.resolver.NoAnswer:
+            print(f"No {record_type} records found.")
+            dns_results[record_type] = ["No records found"]
+        except dns.resolver.NXDOMAIN:
+            print(f"Domain {domain} does not exist (NXDOMAIN).")
+            dns_results[record_type] = ["NXDOMAIN"]
+            return dns_results # Stop further DNS lookups if domain doesn't exist
+        except dns.exception.Timeout:
+            print(f"Timeout resolving {record_type} records.")
+            dns_results[record_type] = ["Timeout"]
+        except Exception as e:
+            print(f"Error resolving {record_type} records: {e}")
+            dns_results[record_type] = [f"Error: {e}"]
+    return dns_results
+
+def get_whois_info(domain):
+    """
+    Performs a WHOIS lookup for a given domain.
+    """
+    if not domain:
+        print("No domain provided for WHOIS lookup.")
+        return None
+
+    print(f"\n--- WHOIS Information for {domain} ---")
+    try:
+        # The python-whois library can sometimes be problematic with certain TLDs
+        # or if WHOIS servers are rate-limiting.
+        # Ensure your system has the 'whois' command-line tool installed as a fallback for some systems.
+        domain_info = whois.whois(domain)
+
+        if domain_info.get('status') and 'redemptionperiod' in str(domain_info.get('status')).lower():
+            print("Warning: Domain might be in redemption period.")
+
+        if domain_info.text: # Raw text often contains more details
+            # print("\nRaw WHOIS Data:")
+            # print(domain_info.text[:1000] + "..." if len(domain_info.text) > 1000 else domain_info.text) # Print a snippet
+            pass # Raw data can be very long
+
+        # Print key information
+        print(f"  Registrar: {domain_info.registrar}")
+        print(f"  Creation Date: {domain_info.creation_date}")
+        print(f"  Expiration Date: {domain_info.expiration_date}")
+        print(f"  Updated Date: {domain_info.updated_date}")
+        print(f"  Name Servers: {domain_info.name_servers}")
+
+        # Registrant information is often redacted
+        if domain_info.org:
+            print(f"  Organization: {domain_info.org}")
+        if domain_info.name:
+             print(f"  Registrant Name: {domain_info.name}") # Often redacted
+
+        # It's good practice to return the full object for further processing
+        return domain_info
+
+    except whois.parser.PywhoisError as e:
+        # This can happen if the domain doesn't exist, or TLD is not supported well
+        print(f"WHOIS lookup error for {domain}: {e}. The domain might not exist or is not queryable.")
+    except Exception as e:
+        print(f"An unexpected error occurred during WHOIS lookup for {domain}: {e}")
+    return None
+
+# --- Main Program Logic ---
+
+def investigate_url(target_url):
+    """
+    Main investigation function for a given URL.
+    """
+    print(f"Starting investigation for URL: {target_url} at {datetime.now()}")
+
+    # 1. Unshorten URL (if applicable)
+    final_url = unshorten_url(target_url)
+    if not final_url:
+        print("Could not process URL.")
+        return
+
+    # 2. Extract domain
+    domain_to_investigate = get_domain_from_url(final_url)
+    if not domain_to_investigate:
+        print("Could not extract domain from URL.")
+        return
+    print(f"Effective domain for investigation: {domain_to_investigate}")
+
+    # 3. Perform DNS Lookups
+    dns_data = get_dns_info(domain_to_investigate)
+    # (Further processing of dns_data can be done here)
+
+    # 4. Perform WHOIS Lookup
+    whois_data = get_whois_info(domain_to_investigate)
+    # (Further processing of whois_data can be done here, e.g., extracting abuse contacts)
+
+    # --- Placeholder for future steps ---
+    # 5. Get IP Geolocation (from A/AAAA records in dns_data)
+    # 6. Identify Hosting Provider (from IP, WHOIS, NS records)
+    # 7. Check against Scam Databases
+    # 8. Check for CSAM Indicators (EXTREME CAUTION - use approved APIs and report to NCMEC/INHOPE)
+    # 9. Collate report
+    # 10. Prepare notifications
+
+    print(f"\nInvestigation for {target_url} completed at {datetime.now()}")
+
+
+# --- Discord Bot Integration (Conceptual - Requires discord.py setup) ---
+# This part is a placeholder to show where Discord bot logic would go.
+# You would need to set up a bot token and event handlers.
+
+# import discord # Would be imported at the top
+
+# DISCORD_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE" # Keep this secure!
+
+# class MyClient(discord.Client):
+#     async def on_ready(self):
+#         print(f'Logged on as {self.user}!')
+
+#     async def on_message(self, message):
+#         if message.author == self.user:
+#             return # Don't respond to ourselves
+
+#         if message.content.startswith('!investigate_url'):
+#             parts = message.content.split()
+#             if len(parts) > 1:
+#                 url_to_check = parts[1]
+#                 await message.channel.send(f"Starting investigation for {url_to_check}...")
+#                 try:
+#                     # In a real bot, you'd run investigate_url in a non-blocking way
+#                     # or pass it to a task queue. For simplicity here, direct call.
+#                     # This will block the bot while running, which is not ideal.
+#                     # investigate_url(url_to_check)
+#                     # For now, let's just acknowledge and simulate the call for this example.
+#                     domain = get_domain_from_url(unshorten_url(url_to_check))
+#                     await message.channel.send(f"Simulated investigation for domain: {domain}. Check console for details.")
+#                     # Actually run the investigation (output will go to console where script is run)
+#                     investigate_url(url_to_check)
+#                     await message.channel.send(f"Console investigation for {url_to_check} complete.")
+
+#                 except Exception as e:
+#                     await message.channel.send(f"Error during investigation: {e}")
+#             else:
+#                 await message.channel.send("Please provide a URL. Usage: `!investigate_url <the_url>`")
+
+# def run_discord_bot():
+#     intents = discord.Intents.default()
+#     intents.message_content = True # Enable message content intent
+#     client = MyClient(intents=intents)
+#     client.run(DISCORD_BOT_TOKEN)
+
+
+if __name__ == "__main__":
+    # Example usage (without Discord bot)
+    # Replace with URLs you want to test
+    test_urls = [
+        "http://google.com",
+        "https://www.github.com",
+        "http://bit.ly/2m9V3Ld", # Example shortened URL (points to a realpython article)
+        "nonexistentdomain123xyz.org" # Example of a non-existent domain
+        # Add more URLs to test, including potentially suspicious ones (be careful!)
+    ]
+
+    for url in test_urls:
+        investigate_url(url)
+        print("\n" + "="*50 + "\n") # Separator
+
+    # To run the Discord bot part (after setting up token and installing discord.py):
+    # print("\nTo run the Discord bot, uncomment the call to run_discord_bot() and ensure token is set.")
+    # run_discord_bot()
