@@ -1,14 +1,27 @@
 # domain_investigation_tool.py
 # Initial script for domain investigation tasks.
 #
-# Required libraries:
+# !!! IMPORTANT REQUIREMENT !!!
+# This script requires external libraries to be installed in your Python environment.
+# Please install them by running the following command in your terminal:
+#
 # pip install dnspython python-whois requests
+#
+# The "ModuleNotFoundError: No module named 'dns'" means 'dnspython' is not installed.
 #
 # IMPORTANT: This is a foundational script. Many more features, error handling,
 # and ethical/legal considerations (especially for CSAM) need to be addressed
 # for a complete and responsible tool as discussed.
 
-import dns.resolver
+# Attempt to import required libraries, with a clear error if dns module is missing.
+try:
+    import dns.resolver
+except ImportError:
+    print("ERROR: The 'dns' module (from dnspython library) was not found.")
+    print("Please install it by running: pip install dnspython")
+    print("Also ensure 'python-whois' and 'requests' are installed: pip install python-whois requests")
+    exit() # Exit if essential library is missing
+
 import whois
 import re
 import requests
